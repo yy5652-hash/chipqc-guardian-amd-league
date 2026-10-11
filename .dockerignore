@@ -1,0 +1,6 @@
+models-dev/
+.index-local/
+tests/
+**/__pycache__/
+**/*.pyc
+.git/

@@ -1,0 +1,141 @@
+{
+ "challenge": "synthetic",
+ "corpus": "nasty",
+ "queries": [
+  {
+   "n": 1,
+   "query": "What is the maximum junction temperature of the TQ-80?",
+   "expected_answer": "97",
+   "answer_aliases": [
+    "97 C"
+   ],
+   "expected_citations": [
+    "tq80_datasheet_r3.pdf"
+   ]
+  },
+  {
+   "n": 2,
+   "query": "Which ticket is referenced when the coolant pump stalled?",
+   "expected_answer": "ORR-2201",
+   "answer_aliases": [],
+   "expected_citations": [
+    "big.log"
+   ]
+  },
+  {
+   "n": 3,
+   "query": "Which firmware version fixed ticket ORR-2201?",
+   "expected_answer": "5.0.1",
+   "answer_aliases": [],
+   "expected_citations": [
+    "quoted.csv"
+   ]
+  },
+  {
+   "n": 4,
+   "query": "The production log shows a coolant pump stall. Which firmware version fixed the underlying defect?",
+   "expected_answer": "5.0.1",
+   "answer_aliases": [],
+   "expected_citations": [
+    "big.log",
+    "quoted.csv"
+   ]
+  },
+  {
+   "n": 5,
+   "query": "What is the price of the 1600W PSU?",
+   "expected_answer": "412.5",
+   "answer_aliases": [
+    "412.5 USD",
+    "$412.5"
+   ],
+   "expected_citations": [
+    "semi.csv"
+   ]
+  },
+  {
+   "n": 6,
+   "query": "What board revision is printed on the label image?",
+   "expected_answer": "REV-D7",
+   "answer_aliases": [],
+   "expected_citations": [
+    "label.png"
+   ]
+  },
+  {
+   "n": 7,
+   "query": "What is the default number of retries in the service source code?",
+   "expected_answer": "7",
+   "answer_aliases": [],
+   "expected_citations": [
+    "svc.py"
+   ]
+  },
+  {
+   "n": 8,
+   "query": "In which quarter does the TQ-80 tape out?",
+   "expected_answer": "Q1 FY28",
+   "answer_aliases": [
+    "Q1FY28"
+   ],
+   "expected_citations": [
+    "roadmap.docx"
+   ]
+  },
+  {
+   "n": 9,
+   "query": "What is the unit price of the TQ-80 at 10,000 units?",
+   "expected_answer": "",
+   "answer_aliases": [],
+   "expected_citations": [],
+   "unanswerable": true
+  },
+  {
+   "n": 10,
+   "query": "What board revision is shown on page 2 of the TQ-80 revision 3 datasheet?",
+   "expected_answer": "REV-E1",
+   "answer_aliases": [],
+   "expected_citations": [
+    "tq80_datasheet_r3.pdf"
+   ]
+  },
+  {
+   "n": 11,
+   "query": "What is the asset tag on the asset tag image?",
+   "expected_answer": "AT-5531",
+   "answer_aliases": [],
+   "expected_citations": [
+    "asset_tag.tif"
+   ]
+  },
+  {
+   "n": 12,
+   "query": "What is the vault code in the deepest notes?",
+   "expected_answer": "VX-7781",
+   "answer_aliases": [],
+   "expected_citations": [
+    "deep/deeper/deepest/notes.txt"
+   ]
+  },
+  {
+   "n": 13,
+   "query": "What baud rate is noted in the UTF-16 note?",
+   "expected_answer": "115200",
+   "answer_aliases": [],
+   "expected_citations": [
+    "utf16.txt"
+   ]
+  },
+  {
+   "n": 14,
+   "query": "How many weeks is the lead time for part ORR-PSU-9000-A?",
+   "expected_answer": "6",
+   "answer_aliases": [
+    "6 weeks"
+   ],
+   "expected_citations": [
+    "parts.xlsx"
+   ]
+  }
+ ]
+}

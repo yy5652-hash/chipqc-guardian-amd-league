@@ -1,0 +1,6 @@
+models/
+models-dev/
+.index*/
+**/__pycache__/
+*.pyc
+notebook/mc3-kit.tgz
