@@ -2,10 +2,10 @@
 
 Two containers that run on AMD Instinct GPUs with ROCm, built on the mandated `rocm/pytorch` image with every weight inside:
 
-* **Match 3, RAG** (`app/`, `Dockerfile`, image `ghcr.io/yy5652-hash/chipqc-mc3:v1`): indexes a folder of mixed enterprise
+* **Match 3, RAG** (`app/`, `Dockerfile`): indexes a folder of mixed enterprise
   documents once, then answers each question with the bare value and the exact set of files it came from, returning an
   empty answer when the corpus does not contain it. 200/200 on the official sample corpus, 14/14 on an adversarial corpus.
-* **Match 2, OCR** (`app_mc2/`, `Dockerfile.mc2`, image `ghcr.io/yy5652-hash/chipqc-mc3:ocr-v1`): reads US and Chinese
+* **Match 2, OCR** (`app_mc2/`, `Dockerfile.mc2`): reads US and Chinese
   licence plates, stop, speed-limit, advisory and work-zone signs. 10/10 on the official samples, 20/20 on noisy, blurred,
   dark, glary, rotated, small-in-scene and low-resolution variants. It reuses every model layer of the RAG image.
 
