@@ -60,13 +60,16 @@ def spawn_server() -> None:
                      start_new_session=True, close_fds=True, cwd=str(HERE))
 
 
-def ensure_server(wait_s: float) -> dict | None:
+def ensure_server(wait_s: float, need_ready: bool = False) -> dict | None:
     end = time.monotonic() + wait_s
     spawned = False
     while time.monotonic() < end:
         r = rpc({"op": "ping"}, timeout=2)
-        if r and r.get("ok"):
+        if r and r.get("ok") and (r.get("ready") or not need_ready or r.get("error")):
             return r
+        if r and r.get("ok"):  # socket is up but models are still loading
+            time.sleep(1.0)
+            continue
         if not spawned and not server_alive():
             spawn_server()
             spawned = True
@@ -94,13 +97,16 @@ def main() -> int:
     t0 = time.monotonic()
 
     if args.index is not None:
-        r = ensure_server(wait_s=config.INDEX_BUDGET_S + 120)
+        # The startup budget (container start + model load + index) is anchored to the container start time.
+        since = config.seconds_since_container_start()
+        total_left = (config.STARTUP_BUDGET_S - since) if since is not None else (config.INDEX_BUDGET_S + 120)
+        deadline_at = time.time() + max(30.0, total_left - 40.0)  # keep a safety margin
+        r = ensure_server(wait_s=max(5.0, deadline_at - time.time()), need_ready=True)
         if not r:
             print("server did not come up; index skipped", file=sys.stderr)
             return 0
-        remaining = max(30.0, config.INDEX_BUDGET_S + 120 - (time.monotonic() - t0))
-        res = rpc({"op": "index", "corpus": str(args.index.resolve()), "budget": config.INDEX_BUDGET_S},
-                  timeout=remaining)
+        res = rpc({"op": "index", "corpus": str(args.index.resolve()), "budget": config.INDEX_BUDGET_S,
+                   "deadline_at": deadline_at}, timeout=max(10.0, deadline_at - time.time() + 20))
         print(json.dumps(res or {"ok": False}, ensure_ascii=False)[:2000])
         return 0
 
@@ -115,8 +121,10 @@ def main() -> int:
         if r:
             remaining = deadline - (time.monotonic() - t0)
             if remaining > 2:
+                # absolute wall-clock deadline for the server's own work (shared clock across processes)
+                deadline_at = time.time() + max(3.0, min(config.SERVER_SOFT_BUDGET_S, remaining - 4))
                 res = rpc({"op": "query", "query": args.query, "corpus": str(args.corpus),
-                           "budget": max(3.0, min(config.SERVER_SOFT_BUDGET_S, remaining - 4)),
+                           "deadline_at": deadline_at, "budget": max(3.0, remaining - 4),
                            "index_budget": max(5.0, remaining - 8)}, timeout=remaining)
                 if res and isinstance(res.get("answer"), str) and isinstance(res.get("citations"), list):
                     answer, citations, conf = res["answer"], res["citations"], res.get("confidence", 0.5)

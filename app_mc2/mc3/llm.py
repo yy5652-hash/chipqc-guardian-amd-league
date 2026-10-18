@@ -17,6 +17,27 @@ OCR_PROMPT = (
 )
 
 
+def to_rgb(img):
+    """RGB conversion that does not clip 16-bit or float images to white (I;16, I, F modes)."""
+    from PIL import Image
+
+    mode = img.mode
+    if mode in ("I;16", "I;16B", "I;16L", "I;16N", "I", "F"):
+        import numpy as np
+
+        a = np.asarray(img, dtype=np.float64)
+        lo, hi = np.percentile(a, 0.5), np.percentile(a, 99.5)
+        if hi <= lo:
+            lo, hi = float(a.min()), float(a.max()) or 1.0
+        a = np.clip((a - lo) / max(hi - lo, 1e-9), 0, 1) * 255.0
+        img = Image.fromarray(a.astype(np.uint8))  # 2-D uint8 -> mode "L"
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        img = Image.alpha_composite(bg, img)
+    return img.convert("RGB")
+
+
 def load_image(path: str, max_side: int | None = None):
     from PIL import Image, ImageOps
 
@@ -28,7 +49,7 @@ def load_image(path: str, max_side: int | None = None):
         pass
     if getattr(img, "n_frames", 1) > 1:
         img.seek(0)
-    img = img.convert("RGB")
+    img = to_rgb(img)
     w, h = img.size
     scale = min(1.0, max_side / max(w, h))
     if scale < 1.0:
@@ -54,11 +75,58 @@ class VLM:
         self.device = device
         dt = getattr(torch, dtype) if device != "cpu" else getattr(torch, __import__("os").environ.get("MC3_CPU_DTYPE", "float32"))
         self.processor = AutoProcessor.from_pretrained(str(path))
-        # no device_map (would need accelerate): load on CPU then move explicitly to the GPU
-        self.model = Cls.from_pretrained(str(path), dtype=dt, low_cpu_mem_usage=True)
-        self.model.to(device)
+        self.model = None
+        if device != "cpu":
+            try:  # stream the shards straight onto the GPU (no CPU copy of 17 GB)
+                self.model = Cls.from_pretrained(str(path), dtype=dt, device_map=device)
+            except Exception as e:  # noqa: BLE001
+                log.warning("direct device load failed (%s); loading on CPU then moving", e)
+                self.model = None
+        if self.model is None:
+            self.model = Cls.from_pretrained(str(path), dtype=dt, low_cpu_mem_usage=True)
+            self.model.to(device)
         self.model.eval()
+        self._linear_patch_embed()
         log.info("VLM loaded from %s on %s in %.1fs", path, device, time.monotonic() - t0)
+
+    def _linear_patch_embed(self) -> None:
+        """The vision patch embedding is a Conv3d whose kernel equals its stride, i.e. a plain linear map over
+        flattened patches. bf16 Conv3d can hit slow fallback kernels on some ROCm/RDNA stacks, so run it as
+        F.linear with the same weights (numerically equivalent)."""
+        import torch.nn.functional as F
+
+        try:
+            pe = self.model.model.visual.patch_embed if hasattr(self.model, "model") and hasattr(self.model.model, "visual") \
+                else self.model.visual.patch_embed
+        except AttributeError:
+            log.warning("patch_embed not found; keeping Conv3d")
+            return
+        proj = pe.proj
+        w = proj.weight.detach().reshape(proj.weight.shape[0], -1).contiguous()
+        b = proj.bias.detach() if proj.bias is not None else None
+        in_dim = w.shape[1]
+
+        def forward(hidden_states):
+            x = hidden_states.reshape(-1, in_dim).to(dtype=w.dtype, device=w.device)
+            return F.linear(x, w, b)
+
+        pe.forward = forward
+        log.info("patch_embed: Conv3d replaced by an equivalent linear map (%d -> %d)", in_dim, w.shape[0])
+
+    def warmup(self) -> float:
+        """One tiny image+text generation so kernels are compiled/selected before the first graded call."""
+        from PIL import Image, ImageDraw
+
+        t0 = time.monotonic()
+        img = Image.new("RGB", (448, 224), "white")
+        ImageDraw.Draw(img).text((20, 100), "WARMUP 123", fill="black")
+        try:
+            self.chat(None, [{"type": "image", "image": img}, {"type": "text", "text": "Read the text."}], max_new_tokens=4)
+        except Exception as e:  # noqa: BLE001
+            log.warning("warmup failed: %s", e)
+        dt = time.monotonic() - t0
+        log.info("warmup done in %.1fs", dt)
+        return dt
 
     def chat(self, system: str | None, user_parts: list[dict], max_new_tokens: int = 160) -> str:
         """user_parts: [{"type":"text","text":...} | {"type":"image","image": PIL.Image}]"""

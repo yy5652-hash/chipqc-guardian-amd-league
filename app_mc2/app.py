@@ -90,8 +90,9 @@ def main() -> int:
         if r:
             remaining = deadline - (time.monotonic() - t0)
             if remaining > 2:
-                res = rpc({"op": "ocr", "path": str(args.input_image.resolve()), "budget": max(3.0, min(20.0, remaining - 4))},
-                          timeout=remaining)
+                deadline_at = time.time() + max(3.0, min(22.0, remaining - 3))
+                res = rpc({"op": "ocr", "path": str(args.input_image.resolve()), "deadline_at": deadline_at,
+                           "budget": max(3.0, remaining - 3)}, timeout=remaining)
                 if res and isinstance(res.get("text"), str):
                     text, conf = res["text"], float(res.get("confidence", 0.5))
     except Exception as e:  # noqa: BLE001

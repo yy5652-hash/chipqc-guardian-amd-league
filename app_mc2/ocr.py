@@ -59,18 +59,20 @@ Rules by type:
 Never add labels, units, punctuation or explanations. Letters are uppercase. Distinguish carefully between 0/O, 1/I, 8/B, 5/S, 2/Z using the font and context."""
 
 LOCATE = """Find the licence plate or road sign in this image. Respond with JSON only:
-{"found": true/false, "bbox": [x1, y1, x2, y2], "kind": "<plate|sign>"}
-Coordinates are pixel positions in this image (origin top-left). The box must tightly enclose the whole plate or sign face."""
+{"found": true/false, "bbox_2d": [x1, y1, x2, y2], "kind": "<plate|sign>"}
+Coordinates are relative, on a 0-1000 scale of the image width and height (origin top-left). The box must tightly enclose the whole plate or sign face."""
 
 
 def prep(img: Image.Image, max_side: int = 1792) -> Image.Image:
+    from mc3.llm import to_rgb
+
     try:
         img = ImageOps.exif_transpose(img)
     except Exception:
         pass
     if getattr(img, "n_frames", 1) > 1:
         img.seek(0)
-    img = img.convert("RGB")
+    img = to_rgb(img)  # 16-bit / float TIFFs would otherwise clip to white
     w, h = img.size
     s = min(1.0, max_side / max(w, h))
     if s < 1.0:
@@ -178,14 +180,20 @@ class OCR:
         try:
             raw = self.vlm.chat(None, [{"type": "image", "image": img}, {"type": "text", "text": LOCATE}], max_new_tokens=64)
             obj = extract_json(raw)
-            if not obj.get("found") or not obj.get("bbox"):
+            box_raw = obj.get("bbox_2d") or obj.get("bbox")
+            if isinstance(box_raw, list) and box_raw and isinstance(box_raw[0], list):
+                box_raw = box_raw[0]
+            if obj.get("found") is False or not box_raw or len(box_raw) < 4:
                 return None
-            x1, y1, x2, y2 = [float(v) for v in obj["bbox"]][:4]
+            x1, y1, x2, y2 = [float(v) for v in box_raw][:4]
             w, h = img.size
-            if x2 <= 1.0 and y2 <= 1.0:  # normalised coordinates
+            if max(x1, y1, x2, y2) <= 1.0:      # fractions
                 x1, x2, y1, y2 = x1 * w, x2 * w, y1 * h, y2 * h
-            if x2 <= 1000 and y2 <= 1000 and (w > 1000 or h > 1000) and max(x2, y2) < 0.6 * max(w, h):
+            elif max(x1, y1, x2, y2) <= 1000:   # Qwen3-VL grounding: relative 0-1000 scale
                 x1, x2, y1, y2 = x1 * w / 1000, x2 * w / 1000, y1 * h / 1000, y2 * h / 1000
+            # else: absolute pixels (already in image coordinates)
+            x1, x2 = sorted((max(0.0, x1), min(float(w), x2)))
+            y1, y2 = sorted((max(0.0, y1), min(float(h), y2)))
             bw, bh = x2 - x1, y2 - y1
             if bw < 16 or bh < 8 or bw > 0.98 * w:
                 return None

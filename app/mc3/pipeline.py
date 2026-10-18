@@ -209,7 +209,7 @@ class Engine:
         return False
 
     # ------------------------------------------------------------------ generation
-    def _parts(self, ctx: list[Chunk], attach_images: bool, max_images: int = 3) -> list[dict]:
+    def _parts(self, ctx: list[Chunk], attach_images: bool, max_images: int | None = None) -> list[dict]:
         parts: list[dict] = []
         lines = ["Excerpts from the document collection (each starts with its id and file path):", ""]
         for c in ctx:
@@ -220,12 +220,17 @@ class Engine:
         if attach_images and not config.STUB:
             from .llm import load_image
             n = 0
+            max_images = config.MAX_ANSWER_IMAGES if max_images is None else min(max_images, config.MAX_ANSWER_IMAGES)
+            seen_paths: set[str] = set()
             for c in ctx[:8]:
                 if n >= max_images:
                     break
                 if c.kind in {"image", "image_page"} and c.image_path:
                     try:
-                        img = load_image(c.image_path)
+                        if c.image_path in seen_paths:  # split transcriptions share one image
+                            continue
+                        seen_paths.add(c.image_path)
+                        img = load_image(c.image_path, max_side=config.ANSWER_IMAGE_MAX_SIDE)
                     except Exception as e:  # noqa: BLE001
                         log.warning("image load failed %s: %s", c.image_path, e)
                         continue
@@ -239,6 +244,7 @@ class Engine:
         parts.append({"type": "text", "text": f"\nQuestion: {question}\n\nJSON:"})
         t0 = time.monotonic()
         raw = self.vlm.chat(SYSTEM, parts, max_new_tokens=120)
+        self._last_call_s = max(getattr(self, "_last_call_s", 0.0) * 0.5, time.monotonic() - t0)
         obj = extract_json(raw)
         log.info("llm %.1fs ctx=%d -> %s", time.monotonic() - t0, len(ctx), raw[:300].replace("\n", " "))
         ev = obj.get("evidence") or []
@@ -263,6 +269,7 @@ class Engine:
         parts.append({"type": "text", "text": f"\nQuestion: {question}\nProposed answer: {answer}\n\nJSON:"})
         t0 = time.monotonic()
         raw = self.vlm.chat(VERIFY, parts, max_new_tokens=24)
+        self._last_call_s = max(getattr(self, "_last_call_s", 0.0) * 0.5, time.monotonic() - t0)
         obj = extract_json(raw)
         log.info("verify %.1fs -> %s", time.monotonic() - t0, raw[:120].replace("\n", " "))
         v = obj.get("supported")
@@ -271,6 +278,11 @@ class Engine:
         if isinstance(v, str):
             return v.strip().lower() in {"true", "yes"}
         return None
+
+    def _can_call(self, dl: Deadline, factor: float = 1.3) -> bool:
+        """Start another model call only if it should finish before the deadline, judged by the last call."""
+        need = max(3.0, factor * getattr(self, "_last_call_s", 2.0) + 0.5)
+        return dl.remaining() > need
 
     # ------------------------------------------------------------------ answer
     def answer(self, question: str, budget_s: float | None = None) -> dict:
@@ -285,7 +297,7 @@ class Engine:
         hop_used = False
 
         # ---- hop 2: identifiers the model asked for, or found in the top excerpts
-        if (lookup or not answer) and dl.ok(5):
+        if (lookup or not answer) and self._can_call(dl, 1.5):
             terms = [t for t in lookup if len(t) >= 2][:4]
             q_idents = {x.upper() for x in identifiers(question)}
             if not terms:
@@ -407,7 +419,7 @@ class Engine:
             log.info("dropping over-citations %s", dropped)
 
         # ---- verification: the value must belong to the item asked about (anti-guessing)
-        if dl.ok(4):
+        if self._can_call(dl, 0.8):  # verify prompts are short
             vchunks = list(chain_chunks[:2])
             for f in A[:2]:
                 vchunks.extend(value_chunks(f)[:1] or file_chunks[f][:1])
@@ -421,10 +433,10 @@ class Engine:
                 return {"answer": "", "citations": [], "confidence": 0.0}
 
         # ---- redundancy among value-carrying files: ablate, keep those whose removal changes the answer
-        if len(A) >= 2 and dl.ok(4):
+        if len(A) >= 2 and self._can_call(dl):
             necessary: list[str] = []
             for f in A[:3]:
-                if not dl.ok(3):
+                if not self._can_call(dl):
                     necessary.append(f)
                     continue
                 ctx_minus = [c for c in ctx if c.file != f]

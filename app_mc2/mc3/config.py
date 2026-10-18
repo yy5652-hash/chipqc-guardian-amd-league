@@ -37,3 +37,17 @@ INDEX_BUDGET_S = float(os.environ.get("MC3_INDEX_BUDGET_S", "420"))
 CHUNK_CHARS = int(os.environ.get("MC3_CHUNK_CHARS", "1400"))
 CHUNK_OVERLAP = int(os.environ.get("MC3_CHUNK_OVERLAP", "200"))
 ROWS_PER_CHUNK = int(os.environ.get("MC3_ROWS_PER_CHUNK", "8"))
+
+# Written by supervise.sh when the container starts; budgets are anchored to it.
+START_FILE = os.environ.get("MC3_START_FILE", "/tmp/mc3-container-start")
+STARTUP_BUDGET_S = float(os.environ.get("MC3_STARTUP_BUDGET_S", "600"))
+MAX_ANSWER_IMAGES = int(os.environ.get("MC3_MAX_ANSWER_IMAGES", "2"))
+ANSWER_IMAGE_MAX_SIDE = int(os.environ.get("MC3_ANSWER_IMAGE_MAX_SIDE", "1024"))
+
+
+def seconds_since_container_start() -> float | None:
+    import time as _t
+    try:
+        return _t.time() - float(open(START_FILE).read().strip())
+    except Exception:
+        return None

@@ -45,9 +45,29 @@ def main() -> int:
     Path(config.PID_PATH).write_text(str(os.getpid()))
 
     from mc3.pipeline import Engine
-    engine = Engine()
-    engine.try_load_index()
+
+    state = {"engine": None, "error": None}
+    ready = threading.Event()
     engine_lock = threading.Lock()
+
+    def load() -> None:
+        try:
+            eng = Engine()
+            try:
+                if getattr(eng, "vlm", None) is not None and hasattr(eng.vlm, "warmup"):
+                    eng.vlm.warmup()
+            except Exception as e:  # noqa: BLE001
+                log.warning("warmup: %s", e)
+            eng.try_load_index()
+            state["engine"] = eng
+        except Exception as e:  # noqa: BLE001
+            state["error"] = str(e)
+            log.error("model load failed: %s\n%s", e, traceback.format_exc())
+        finally:
+            ready.set()
+            log.info("engine ready=%s (load error=%s)", state["engine"] is not None, state["error"])
+
+    threading.Thread(target=load, daemon=True).start()
 
     sock_path = config.SOCKET_PATH
     try:
@@ -58,30 +78,52 @@ def main() -> int:
     srv.bind(sock_path)
     os.chmod(sock_path, 0o666)
     srv.listen(16)
-    log.info("server ready on %s (index=%s)", sock_path, engine.index is not None)
+    log.info("server socket open on %s (models loading in background)", sock_path)
+
+    def wait_ready(deadline_at: float | None) -> bool:
+        timeout = None if deadline_at is None else max(0.0, deadline_at - time.time())
+        return ready.wait(timeout) and state["engine"] is not None
 
     def handle(conn: socket.socket) -> None:
         try:
             req = recv_json(conn)
             op = req.get("op")
             if op == "ping":
-                send_json(conn, {"ok": True, "indexed": engine.index is not None,
-                                 "chunks": len(engine.index.chunks) if engine.index else 0})
+                eng = state["engine"]
+                send_json(conn, {"ok": True, "ready": ready.is_set() and eng is not None, "error": state["error"],
+                                 "indexed": bool(eng and eng.index is not None),
+                                 "chunks": len(eng.index.chunks) if eng and eng.index else 0})
                 return
             if op == "index":
+                deadline_at = req.get("deadline_at")
+                if not wait_ready(deadline_at):
+                    send_json(conn, {"ok": False, "error": "models not ready before the index deadline"})
+                    return
                 with engine_lock:
-                    info = engine.build_index(Path(req["corpus"]), req.get("budget"))
+                    budget = req.get("budget")
+                    if deadline_at:
+                        budget = max(10.0, min(budget or 1e9, deadline_at - time.time()))
+                    info = state["engine"].build_index(Path(req["corpus"]), budget)
                 send_json(conn, {"ok": True, **info})
                 return
             if op == "query":
                 t0 = time.monotonic()
+                deadline_at = req.get("deadline_at") or (time.time() + float(req.get("budget") or config.SERVER_SOFT_BUDGET_S))
+                if not wait_ready(deadline_at - 4):
+                    send_json(conn, {"answer": "", "citations": [], "confidence": 0.0, "note": "models not ready"})
+                    return
                 with engine_lock:
-                    if engine.index is None:
-                        if not engine.try_load_index():
-                            corpus = req.get("corpus")
-                            if corpus and Path(corpus).is_dir():
-                                engine.build_index(Path(corpus), req.get("index_budget", 200))
-                    res = engine.answer(req["query"], req.get("budget"))
+                    eng = state["engine"]
+                    remaining = deadline_at - time.time()
+                    if remaining < 4.0:  # an earlier request overran: refuse instead of cascading
+                        log.warning("query skipped: only %.1fs left after waiting for the engine", remaining)
+                        send_json(conn, {"answer": "", "citations": [], "confidence": 0.0, "note": "no time left"})
+                        return
+                    if eng.index is None and not eng.try_load_index():
+                        corpus = req.get("corpus")
+                        if corpus and Path(corpus).is_dir():
+                            eng.build_index(Path(corpus), max(5.0, remaining - 8))
+                    res = eng.answer(req["query"], max(3.0, deadline_at - time.time()))
                 res["seconds"] = round(time.monotonic() - t0, 2)
                 send_json(conn, res)
                 return
